@@ -11,6 +11,7 @@ andrey.kan@adelaide.edu.au
 #include <fstream>
 #include <deque>
 #include <vector>
+#include <algorithm>
 
 // std is a namespace: https://www.cplusplus.com/doc/oldtutorial/namespaces/
 const int TIME_ALLOWANCE = 8;  // allow to use up to this number of time slots at once
@@ -50,7 +51,8 @@ public:
 
 void initialize_system(
     std::ifstream &in_file,
-    std::deque<Event> &arrival_events,
+    std::deque<Event> &p0_arrivals,
+    std::deque<Event> &p1_arrivals,
     std::vector<Customer> &customers)
 {
     std::string name;
@@ -66,7 +68,13 @@ void initialize_system(
 
         // new customer arrival event
         Event arrival_event(arrival_time, customer_id);
-        arrival_events.push_back(arrival_event);
+        if(priority) {
+            //low priority
+            p1_arrivals.push_back(arrival_event);
+        } else {
+            //high priority
+            p0_arrivals.push_back(arrival_event);
+        }
 
         customer_id++;
     }
@@ -76,8 +84,10 @@ void print_state(
     std::ofstream &out_file,
     int current_time,
     int current_id,
-    const std::deque<Event> &arrival_events,
-    const std::deque<int> &customer_queue)
+    const std::deque<Event> &p0_arrivals,
+    const std::deque<Event> &p1_arrivals,
+    const std::deque<int> &p0_queue,
+    const std::deque<int> &p1_queue)
 {
     out_file << current_time << " " << current_id << '\n';
     if (PRINT_LOG == 0)
@@ -85,16 +95,29 @@ void print_state(
         return;
     }
     std::cout << current_time << ", " << current_id << '\n';
-    for (int i = 0; i < arrival_events.size(); i++)
+    for (int i = 0; i < p0_arrivals.size(); i++)
     {
-        std::cout << "\t" << arrival_events[i].event_time << ", " << arrival_events[i].customer_id << ", ";
+        std::cout << "\t" << p0_arrivals[i].event_time << ", " << p0_arrivals[i].customer_id << ", ";
+    }
+    for (int i = 0; i < p1_arrivals.size(); i++)
+    {
+        std::cout << "\t" << p1_arrivals[i].event_time << ", " << p1_arrivals[i].customer_id << ", ";
     }
     std::cout << '\n';
-    for (int i = 0; i < customer_queue.size(); i++)
+    for (int i = 0; i < p0_queue.size(); i++)
     {
-        std::cout << "\t" << customer_queue[i] << ", ";
+        std::cout << "\t" << p0_queue[i] << ", ";
+    }
+    for (int i = 0; i < p1_queue.size(); i++)
+    {
+        std::cout << "\t" << p1_queue[i] << ", ";
     }
     std::cout << '\n';
+}
+
+bool compare_customers(Customer a, Customer b)
+{
+    return a.slots_remaining < b.slots_remaining;
 }
 
 // process command line arguments
@@ -116,48 +139,86 @@ int main(int argc, char *argv[])
 
     // deque: https://www.geeksforgeeks.org/deque-cpp-stl/
     // vector: https://www.geeksforgeeks.org/vector-in-cpp-stl/
-    std::deque<Event> arrival_events; // new customer arrivals
+    std::deque<Event> p0_arrivals; // priority new customer arrivals
+    std::deque<Event> p1_arrivals; // new customer arrivals
     std::vector<Customer> customers; // information about each customer
 
     // read information from file, initialize events queue
-    initialize_system(in_file, arrival_events, customers);
+    initialize_system(in_file, p0_arrivals, p1_arrivals, customers);
 
     int current_id = -1; // who is using the machine now, -1 means nobody
     int time_out = -1; // time when current customer will be preempted
-    std::deque<int> queue; // waiting queue
+    std::deque<int> p0_queue; // priority waiting queue
+    std::deque<int> p1_queue; // waiting queue
+
 
     // step by step simulation of each time slot
-    bool all_done = false;
+    bool all_done = false, new_arrivals = false;
     for (int current_time = 0; !all_done; current_time++)
     {
-        // welcome newly arrived customers
-        while (!arrival_events.empty() && (current_time == arrival_events[0].event_time))
+        // welcome newly arrived priority customers
+        while (!p0_arrivals.empty() && (current_time == p0_arrivals[0].event_time))
         {
-            queue.push_back(arrival_events[0].customer_id);
-            arrival_events.pop_front();
+            p0_queue.push_back(p0_arrivals[0].customer_id);
+            p0_arrivals.pop_front();
+            std::sort(p0_queue.begin(), p0_queue.end(), compare_customers);
+            new_arrivals = true;
         }
-        // check if we need to take a customer off the machine
-        if (current_id >= 0)
+
+        // welcome newly arrived customers
+        while (!p1_arrivals.empty() && (current_time == p1_arrivals[0].event_time))
         {
-            if (current_time == time_out)
+            p1_queue.push_back(p1_arrivals[0].customer_id);
+            p1_arrivals.pop_front();
+            std::sort(p1_queue.begin(), p1_queue.end(), compare_customers);
+            new_arrivals = true;
+        }
+
+        // check if we need to take a customer off the machine
+        if ((current_id >= 0) && (new_arrivals))
+        {
+            if (!p0_queue.empty())
             {
-                int last_run = current_time - customers[current_id].playing_since;
-                customers[current_id].slots_remaining -= last_run;
-                if (customers[current_id].slots_remaining > 0)
+                if (customers[current_id].slots_remaining > customers[p0_queue.front()].slots_remaining)
                 {
-                    // customer is not done yet, waiting for the next chance to play
-                    queue.push_back(current_id);
+                    int last_run = current_time - customers[current_id].playing_since;
+                    customers[current_id].slots_remaining -= last_run;
+                    if (customers[current_id].slots_remaining > 0)
+                    {
+                        // customer is not done yet, waiting for the next chance to play
+                        if(customers[current_id].priority)
+                            p1_queue.push_back(current_id);
+                        else
+                            p0_queue.push_back(current_id);
+                    }
+                    current_id = -1; // the machine is free now
                 }
-                current_id = -1; // the machine is free now
+            }
+            else if (!p1_queue.empty())
+            {
+                if (customers[current_id].slots_remaining > customers[p1_queue.front()].slots_remaining)
+                {
+                    int last_run = current_time - customers[current_id].playing_since;
+                    customers[current_id].slots_remaining -= last_run;
+                    if (customers[current_id].slots_remaining > 0)
+                    {
+                        // customer is not done yet, waiting for the next chance to play
+                        if(customers[current_id].priority)
+                            p1_queue.push_back(current_id);
+                        else
+                            p0_queue.push_back(current_id);
+                    }
+                    current_id = -1; // the machine is free now
+                }
             }
         }
         // if machine is empty, schedule a new customer
         if (current_id == -1)
         {
-            if (!queue.empty()) // is anyone waiting?
+            if (!p0_queue.empty()) // is anyone waiting in the priority queue?
             {
-                current_id = queue.front();
-                queue.pop_front();
+                current_id = p0_queue.front();
+                p0_queue.pop_front();
                 if (TIME_ALLOWANCE > customers[current_id].slots_remaining)
                 {
                     time_out = current_time + customers[current_id].slots_remaining;
@@ -168,11 +229,16 @@ int main(int argc, char *argv[])
                 }
                 customers[current_id].playing_since = current_time;
             }
+            else if (!p1_queue.empty())// is anyone else waiting?
+            {
+
+            }
         }
-        print_state(out_file, current_time, current_id, arrival_events, queue);
+        print_state(out_file, current_time, current_id, p0_arrivals, p1_arrivals, p0_queue, p1_queue);
 
         // exit loop when there are no new arrivals, no waiting and no playing customers
-        all_done = (arrival_events.empty() && queue.empty() && (current_id == -1));
+        all_done = (p0_arrivals.empty() && p1_arrivals.empty() && p0_queue.empty() && p1_queue.empty() && (current_id == -1));
+        new_arrivals = false;
     }
 
     return 0;
