@@ -115,11 +115,6 @@ void print_state(
     std::cout << '\n';
 }
 
-bool compare_customers(Customer a, Customer b)
-{
-    return a.slots_remaining < b.slots_remaining;
-}
-
 // process command line arguments
 // https://www.geeksforgeeks.org/command-line-arguments-in-c-cpp/
 int main(int argc, char *argv[])
@@ -161,7 +156,7 @@ int main(int argc, char *argv[])
         {
             p0_queue.push_back(p0_arrivals[0].customer_id);
             p0_arrivals.pop_front();
-            std::sort(p0_queue.begin(), p0_queue.end(), compare_customers);
+            std::sort(p0_queue.begin(), p0_queue.end());
             new_arrivals = true;
         }
 
@@ -170,19 +165,20 @@ int main(int argc, char *argv[])
         {
             p1_queue.push_back(p1_arrivals[0].customer_id);
             p1_arrivals.pop_front();
-            std::sort(p1_queue.begin(), p1_queue.end(), compare_customers);
+            std::sort(p1_queue.begin(), p1_queue.end());
             new_arrivals = true;
         }
 
         // check if we need to take a customer off the machine
-        if ((current_id >= 0) && (new_arrivals))
-        {
-            if (!p0_queue.empty())
+        if (current_id >= 0)
+        {  
+            customers[current_id].slots_remaining--;
+            //preempt if a new customer has arrived or the current customer has finished
+            if (!p0_queue.empty() && (new_arrivals || (customers[current_id].slots_remaining == 0)))
             {
                 if (customers[current_id].slots_remaining > customers[p0_queue.front()].slots_remaining)
                 {
-                    int last_run = current_time - customers[current_id].playing_since;
-                    customers[current_id].slots_remaining -= last_run;
+                    
                     if (customers[current_id].slots_remaining > 0)
                     {
                         // customer is not done yet, waiting for the next chance to play
@@ -194,12 +190,10 @@ int main(int argc, char *argv[])
                     current_id = -1; // the machine is free now
                 }
             }
-            else if (!p1_queue.empty())
+            else if (!p1_queue.empty() && (new_arrivals || (customers[current_id].slots_remaining == 0)))
             {
                 if (customers[current_id].slots_remaining > customers[p1_queue.front()].slots_remaining)
                 {
-                    int last_run = current_time - customers[current_id].playing_since;
-                    customers[current_id].slots_remaining -= last_run;
                     if (customers[current_id].slots_remaining > 0)
                     {
                         // customer is not done yet, waiting for the next chance to play
@@ -219,19 +213,21 @@ int main(int argc, char *argv[])
             {
                 current_id = p0_queue.front();
                 p0_queue.pop_front();
-                if (TIME_ALLOWANCE > customers[current_id].slots_remaining)
+                /*if (TIME_ALLOWANCE > customers[current_id].slots_remaining)
                 {
                     time_out = current_time + customers[current_id].slots_remaining;
                 }
                 else
                 {
                     time_out = current_time + TIME_ALLOWANCE;
-                }
+                }*/
                 customers[current_id].playing_since = current_time;
             }
             else if (!p1_queue.empty())// is anyone else waiting?
             {
-
+                current_id = p1_queue.front();
+                p1_queue.pop_front();
+                customers[current_id].playing_since = current_time;
             }
         }
         print_state(out_file, current_time, current_id, p0_arrivals, p1_arrivals, p0_queue, p1_queue);
