@@ -12,9 +12,9 @@ andrey.kan@adelaide.edu.au
 #include <deque>
 #include <vector>
 #include <algorithm>
+#include <functional>
 
 // std is a namespace: https://www.cplusplus.com/doc/oldtutorial/namespaces/
-const int TIME_ALLOWANCE = 16;  // allow to use up to this number of time slots at once
 const int PRINT_LOG = 0; // print detailed execution trace
 
 class Customer
@@ -94,25 +94,52 @@ void print_state(
     {
         return;
     }
-    std::cout << current_time << ", " << current_id << '\n';
+    std::cout << current_time << ", " << current_id << "\n p0 arrivals: ";
     for (int i = 0; i < p0_arrivals.size(); i++)
     {
         std::cout << "\t" << p0_arrivals[i].event_time << ", " << p0_arrivals[i].customer_id << ", ";
     }
+    std::cout << "\n p1 arrivals: ";
     for (int i = 0; i < p1_arrivals.size(); i++)
     {
         std::cout << "\t" << p1_arrivals[i].event_time << ", " << p1_arrivals[i].customer_id << ", ";
     }
-    std::cout << '\n';
+    std::cout << "\n p0 queue: ";
     for (int i = 0; i < p0_queue.size(); i++)
     {
         std::cout << "\t" << p0_queue[i] << ", ";
     }
+    std::cout << "\n p1 queue: ";
     for (int i = 0; i < p1_queue.size(); i++)
     {
         std::cout << "\t" << p1_queue[i] << ", ";
     }
     std::cout << '\n';
+}
+
+bool compare_customers(int a, int b, std::vector<Customer> &customers, int current_time)
+{
+    return customers[a].slots_remaining < customers[b].slots_remaining;
+}
+
+int find_longest_wait(std::deque<int> &queue, std::vector<Customer> &customers)
+{
+    int index = -1;
+
+    for (size_t i = 0; i < queue.size(); i++)
+    {
+        if (customers[i].playing_since == -1)
+        {
+            if (index == -1)
+                index = i;
+            else
+            {
+                index = (customers[i].arrival_time < customers[index].arrival_time) ? i : index;
+            }
+        }
+    }
+    
+    return index;
 }
 
 // process command line arguments
@@ -142,77 +169,141 @@ int main(int argc, char *argv[])
     initialize_system(in_file, p0_arrivals, p1_arrivals, customers);
 
     int current_id = -1; // who is using the machine now, -1 means nobody
-    int time_out = -1; // time when current customer will be preempted
     std::deque<int> p0_queue; // priority waiting queue
     std::deque<int> p1_queue; // waiting queue
 
+    std::deque<int> first_serve; //first served queue
+
     // step by step simulation of each time slot
-    bool all_done = false;
+    bool all_done = false, new_arrivals = false;
     for (int current_time = 0; !all_done; current_time++)
     {
-        // welcome newly arrived priority customers
+        // welcome newly arrived priority customers to first serve queue
         while (!p0_arrivals.empty() && (current_time == p0_arrivals[0].event_time))
         {
-            p0_queue.push_back(p0_arrivals[0].customer_id);
+            first_serve.push_back(p0_arrivals[0].customer_id);
             p0_arrivals.pop_front();
-            std::sort(p0_queue.begin(), p0_queue.end());
+            new_arrivals = true;
         }
 
-        // welcome newly arrived customers
+        // welcome other arrived customers to first serve queue
         while (!p1_arrivals.empty() && (current_time == p1_arrivals[0].event_time))
         {
-            p1_queue.push_back(p1_arrivals[0].customer_id);
+            first_serve.push_back(p1_arrivals[0].customer_id);
             p1_arrivals.pop_front();
-            std::sort(p1_queue.begin(), p1_queue.end());
+            new_arrivals = true;
         }
 
         // check if we need to take a customer off the machine
         if (current_id >= 0)
         {
-            if (current_time == time_out)
+            customers[current_id].slots_remaining--;
+            bool taken_off = false;
+
+            if(!first_serve.empty())
             {
-                int last_run = current_time - customers[current_id].playing_since;
-                customers[current_id].slots_remaining -= last_run;
-                if (customers[current_id].slots_remaining > 0)
+                if(first_serve.front() == current_id)
                 {
-                    // customer is not done yet, waiting for the next chance to play
-                    if(customers[current_id].priority)
-                        p1_queue.push_back(current_id);
-                    else
-                        p0_queue.push_back(current_id);
+                    // customer has played, take off the first serve queue
+                    first_serve.pop_front();
+
+                    if (customers[current_id].slots_remaining > 0)
+                    {
+                        // customer is not done yet, waiting for the next chance to play
+                        if(customers[current_id].priority)
+                        {
+                            p1_queue.push_back(current_id);
+                            using namespace std::placeholders;
+                            //sort queue based on remaining time slots
+                            std::sort(p1_queue.begin(), p1_queue.end(), std::bind(compare_customers, _1, _2, customers, current_time));
+                        }
+                        else
+                        {
+                            p0_queue.push_back(current_id);
+                            using namespace std::placeholders;
+                            //sort priority queue based on remaining time slots
+                            std::sort(p0_queue.begin(), p0_queue.end(), std::bind(compare_customers, _1, _2, customers, current_time));
+                        }
+                    }
+
+                    current_id = -1;
+                    taken_off = true;
                 }
-                current_id = -1; // the machine is free now
             }
+
+            if ((!p0_queue.empty()) && new_arrivals && !taken_off)
+            {
+                //possible preempt if a new customer has arrived
+                if (customers[current_id].slots_remaining > customers[p0_queue.front()].slots_remaining)
+                {
+                    if (customers[current_id].slots_remaining > 0)
+                    {
+                        // customer is not done yet, waiting for the next chance to play
+                        if(customers[current_id].priority)
+                            p1_queue.push_back(current_id);
+                        else
+                            p0_queue.push_back(current_id);
+                    }
+                    current_id = -1; // the machine is free now
+                    taken_off = true;
+                }
+            }
+            
+            if (!p1_queue.empty() && new_arrivals && !taken_off)
+            {
+                //possible preempt if a new customer has arrived
+                if(customers[current_id].slots_remaining > (2-customers[current_id].priority)*customers[p1_queue.front()].slots_remaining)
+                {
+                    if (customers[current_id].slots_remaining > 0)
+                    {
+                        // customer is not done yet, waiting for the next chance to play
+                        if(customers[current_id].priority)
+                            p1_queue.push_back(current_id);
+                        else
+                            p0_queue.push_back(current_id);
+                    }
+                    current_id = -1; // the machine is free now
+                    taken_off = true;
+                }
+            }
+
+            if ((customers[current_id].slots_remaining == 0) && !taken_off)
+                current_id = -1; //customer has finished
         }
+
         // if machine is empty, schedule a new customer
         if (current_id == -1)
         {
-            if (!p0_queue.empty()) // is anyone waiting?
+            if (!first_serve.empty()) //check the first serve queue
+            {
+                current_id = first_serve.front();
+                customers[current_id].playing_since = current_time;               
+            }
+            else if (!p0_queue.empty() && !p1_queue.empty())// is anyone waiting?
+            {
+                if(customers[p0_queue.front()].slots_remaining > (2*customers[p1_queue.front()].slots_remaining))
+                {
+                    current_id = p1_queue.front();
+                    p1_queue.pop_front();
+                    customers[current_id].playing_since = current_time;
+                }
+                else
+                {
+                    current_id = p0_queue.front();
+                    p0_queue.pop_front();
+                    customers[current_id].playing_since = current_time;
+                }
+            }
+            else if (!p0_queue.empty()) // is anyone waiting in the priority queue?
             {
                 current_id = p0_queue.front();
                 p0_queue.pop_front();
-                if (TIME_ALLOWANCE > customers[current_id].slots_remaining)
-                {
-                    time_out = current_time + customers[current_id].slots_remaining;
-                }
-                else
-                {
-                    time_out = current_time + TIME_ALLOWANCE;
-                }
                 customers[current_id].playing_since = current_time;
             }
-            else if (!p1_queue.empty()) // is anyone waiting?
+            else if (!p1_queue.empty())// is anyone else waiting?
             {
                 current_id = p1_queue.front();
                 p1_queue.pop_front();
-                if (TIME_ALLOWANCE > customers[current_id].slots_remaining)
-                {
-                    time_out = current_time + customers[current_id].slots_remaining;
-                }
-                else
-                {
-                    time_out = current_time + TIME_ALLOWANCE;
-                }
                 customers[current_id].playing_since = current_time;
             }
         }
@@ -220,6 +311,7 @@ int main(int argc, char *argv[])
 
         // exit loop when there are no new arrivals, no waiting and no playing customers
         all_done = (p0_arrivals.empty() && p1_arrivals.empty() && p0_queue.empty() && p1_queue.empty() && (current_id == -1));
+        new_arrivals = false;
     }
 
     return 0;

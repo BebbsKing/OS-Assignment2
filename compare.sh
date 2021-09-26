@@ -14,7 +14,7 @@ baseline=$(echo "outputs/baseline_$(echo $test | cut -d "_" -f 2)")
 scheduler=$(echo "outputs/scheduler_$(echo $test | cut -d "_" -f 2)")
 
 g++ baseline.cpp -o bin/baseline
-g++ strf_scheduler.cpp -o bin/scheduler
+g++ scheduler.cpp -o bin/scheduler
 g++ compare_stats.cpp -o bin/compare_stats
 
 ./bin/baseline $test $baseline
